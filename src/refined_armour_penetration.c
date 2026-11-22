@@ -91,9 +91,9 @@ typedef struct {
 static ArmourConfig g_cfg = {
     0,      /* enabled: off until battle script enables it */
     1.3f,   /* gamma */
-    0.5f,   /* lower_cap */
+    0.65f,  /* lower_cap */
     0,      /* mode: 0 = combined min(linear, hyperbolic) */
-    10.0f,  /* hyp_step */
+    20.0f,  /* hyp_step */
     1.0f,   /* min_damage */
     0       /* use_kv_lower_cap */
 };
