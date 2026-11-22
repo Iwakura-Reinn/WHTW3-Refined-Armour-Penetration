@@ -74,11 +74,15 @@ local function ensure_dll_extracted()
         return false, "embedded binary module missing: " .. tostring(bin)
     end
 
+    local tag_file = DLL_FILE .. ".tag"
     local f_check = io.open(DLL_FILE, "rb")
     if f_check then
         local sz = f_check:seek("end")
         f_check:close()
-        if sz == bin.size then
+        local f_tag = io.open(tag_file, "rb")
+        local cur_tag = f_tag and f_tag:read("*a") or nil
+        if f_tag then f_tag:close() end
+        if sz == bin.size and type(bin.tag) == "string" and cur_tag == bin.tag then
             return true, "up_to_date"
         end
     end
@@ -97,6 +101,14 @@ local function ensure_dll_extracted()
     end
     f_out:write(raw)
     f_out:close()
+
+    if type(bin.tag) == "string" then
+        local f_t = io.open(tag_file, "wb")
+        if f_t then
+            f_t:write(bin.tag)
+            f_t:close()
+        end
+    end
     return true, "extracted"
 end
 
