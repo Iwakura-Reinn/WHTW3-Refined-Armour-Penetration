@@ -93,7 +93,7 @@ static ArmourConfig g_cfg = {
     1.3f,   /* gamma */
     0.5f,   /* lower_cap */
     0,      /* mode: 0 = combined min(linear, hyperbolic) */
-    20.0f,  /* hyp_step */
+    10.0f,  /* hyp_step */
     1.0f,   /* min_damage */
     0       /* use_kv_lower_cap */
 };

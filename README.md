@@ -29,7 +29,7 @@ The formula computes:
 3. **Effective Armour**: `eff_armour = armour * (1 - p)`
 4. **Two Reduction Curves**:
    - **Refined Linear Roll (Uncapped)**: `roll = uniform(eff_armour * lower_cap, eff_armour)`, `red_lin = clamp(roll * 0.01, 0, 1)` (default `lower_cap = 0.50`)
-   - **Hyperbolic Curve**: `red_hyp = eff_armour / (eff_armour + S)` (default `S = 20`)
+   - **Hyperbolic Curve**: `red_hyp = eff_armour / (eff_armour + S)` (default `S = 10`)
 5. **Mode Selection (configurable in MCT)**:
    - **`Combined` (Default)**: `red = min(red_lin, red_hyp)`
    - **`Refined Linear Only`**: `red = red_lin`
@@ -38,8 +38,8 @@ The formula computes:
 
 ### Understanding `gamma`, `Combined` Mode & Combat Feel
 
-- **Why `min(Refined Linear, Hyperbolic(20))`?**
-  Instead of imposing an abrupt hard cap (like a flat 85% wall), taking `min(red_lin, red_hyp)` preserves the tactile **linear-roll** curve across low/mid effective armour (`0 – 100`), and then **smoothly transitions into `Hyperbolic(S = 20)`** at high effective armour (`110+`). Notice that because `red_lin` is a random roll in `[0.5*eff, 1.0*eff]`, its upper rolls begin touching `red_hyp` slightly earlier (~`eff = 70–80`), creating a completely seamless, kink-free transition into diminishing returns.
+- **Why `min(Refined Linear, Hyperbolic(10))`?**
+  Instead of imposing an abrupt hard cap (like a flat 85% wall), taking `min(red_lin, red_hyp)` preserves the tactile **linear-roll** curve across low/mid effective armour (`0 – 100`), and then **smoothly transitions into `Hyperbolic(S = 10)`** at high effective armour (`100+`). Notice that because `red_lin` is a random roll in `[0.5*eff, 1.0*eff]`, its upper rolls begin touching `red_hyp` slightly earlier (~`eff = 80–90`), creating a completely seamless, kink-free transition into diminishing returns.
 - **`gamma = 1.00` (Mathematically Same Expected Damage as Vanilla below 100 Armour, Different Variance)**:
   When `gamma = 1.0` and armour does not overflow (`armour <= 100`), `eff_armour = armour * (N / D)`, so the average damage reduction is `0.75 * armour * 0.01 * (N / D)`. Multiplying by total damage `D` yields `D - N * (0.75 * armour * 0.01) = N * (1 - 0.75 * armour * 0.01) + A`, which has **the exact same expected damage as vanilla**.
   However, **the single-hit distribution is different**: vanilla rolls RNG only on `N` while `A` is deterministic, whereas the refined model rolls RNG across total damage `D` using `eff_armour`.
@@ -52,14 +52,14 @@ The formula computes:
 
 In vanilla, an `Armour = 120` unit rolls between `60%` and `120%` reduction on non-AP damage `N`, and anything above `100%` is clamped away. By `Armour = 200`, non-AP damage is `100%` blocked on every roll, hitting a hard ceiling at `N / D` (`50%` total reduction against a `50%` AP attack).
 
-With **Refined Armour Penetration**, armour is scaled by `(1 - p)` **first** to obtain `eff_armour`, and high effective armour smoothly enters the `Hyperbolic(S = 20)` tail (`eff / (eff + 20)`), so `120–200` armour continues to provide meaningful, smooth protection without ever becoming 100% invulnerable.
+With **Refined Armour Penetration**, armour is scaled by `(1 - p)` **first** to obtain `eff_armour`, and high effective armour smoothly enters the `Hyperbolic(S = 10)` tail (`eff / (eff + 10)`), so `120–200` armour continues to provide meaningful, smooth protection without ever becoming 100% invulnerable.
 
 ### Reduction Curve & Interactive Explorer: `ratio = f(Armour)` at `50%` AP Share (`N = 50, A = 50`)
 
 > **[Open Interactive 2D Armour & AP Curve Explorer (GitHub Pages)](https://iwakura-reinn.github.io/WHTW3-Refined-Armour-Penetration/)**  
 > Tune `gamma`, `lower_cap`, and `Hyperbolic Step S` in real time, switch between EHP / Reduction % / Marginal Derivative, or inspect any `(Armour, AP%)` slice (`docs/index.html`).
 
-| Target Armour | Vanilla Avg Reduction | `gamma = 1.0` | `gamma = 1.3, S = 20` (Default) | `gamma = 1.4, S = 20` |
+| Target Armour | Vanilla Avg Reduction | `gamma = 1.0` | `gamma = 1.3, S = 10` (Default) | `gamma = 1.4, S = 10` |
 |---:|---:|---:|---:|---:|
 | **0** | `0.00%` | `0.00%` | `0.00%` | `0.00%` |
 | **20** | `7.50%` | `7.50%` | `8.91%` | `9.32%` |
@@ -68,10 +68,10 @@ With **Refined Armour Penetration**, armour is scaled by `(1 - p)` **first** to 
 | **80** | `30.00%` | `30.00%` | `35.63%` | `37.26%` |
 | **100** | `37.50%` | `37.50%` | `44.54%` | `46.58%` |
 | **120** | `43.33%` *(overflows)* | `45.00%` | `53.45%` | `55.90%` |
-| **140** | `46.79%` *(overflows)* | `52.50%` | `62.28%` | `64.85%` |
-| **160** | `48.75%` *(overflows)* | `60.00%` | `69.64%` | `71.91%` |
-| **180** | `49.72%` *(overflows)* | `66.76%` | `75.37%` | `77.34%` |
-| **200** | `50.00%` *(hard wall)* | `72.22%` | `79.81%` | `81.49%` |
+| **140** | `46.79%` *(overflows)* | `52.50%` | `62.36%` | `65.21%` |
+| **160** | `48.75%` *(overflows)* | `60.00%` | `71.05%` | `73.80%` |
+| **180** | `49.72%` *(overflows)* | `66.76%` | `77.94%` | `80.27%` |
+| **200** | `50.00%` *(hard wall)* | `72.22%` | `83.15%` | `85.09%` |
 
 ### How Native Injection Works (Open-Source Transparency)
 
@@ -108,7 +108,7 @@ With **Refined Armour Penetration**, armour is scaled by `(1 - p)` **first** to 
 3. **有效护甲**：`eff_armour = armour * (1 - p)`
 4. **两条减伤曲线**：
    - **线性掷骰（无硬上限）**：`roll = uniform(eff_armour * lower_cap, eff_armour)`，`red_lin = clamp(roll * 0.01, 0, 1)`（默认 `lower_cap = 0.50`）
-   - **双曲减伤**：`red_hyp = eff_armour / (eff_armour + S)`（默认 `S = 20`）
+   - **双曲减伤**：`red_hyp = eff_armour / (eff_armour + S)`（默认 `S = 10`）
 5. **模式选择（可在 MCT 切换）**：
    - **`Combined`（默认）**：`red = min(red_lin, red_hyp)`
    - **`Refined Linear Only`**：`red = red_lin`
@@ -117,8 +117,8 @@ With **Refined Armour Penetration**, armour is scaled by `(1 - p)` **first** to 
 
 ### `gamma` 旋钮、结合模式与手感解析
 
-- **为什么默认采用 `min(线性掷骰, 双曲(20))`？**
-  相比一刀切的 `85%` 硬封顶，取 `min(red_lin, red_hyp)` 可以在中低有效护甲段（`0 ~ 100`）完整保留线性的“重甲门槛与加速质感”，而在高有效护甲段（`110+`）平滑切入 `Hyperbolic(S = 20)` 的渐近曲线。同时因为线性掷骰 `red_lin` 在 `[0.5 * eff, 1.0 * eff]` 之间随机波动，高骰部分会提前接触双曲线，使期望减伤曲线在分叉处实现**零折点的自然过渡**。
+- **为什么默认采用 `min(线性掷骰, 双曲(10))`？**
+  相比一刀切的 `85%` 硬封顶，取 `min(red_lin, red_hyp)` 可以在中低有效护甲段（`0 ~ 100`）完整保留线性的“重甲门槛与加速质感”，而在高有效护甲段（`100+`）平滑切入 `Hyperbolic(S = 10)` 的渐近曲线。同时因为线性掷骰 `red_lin` 在 `[0.5 * eff, 1.0 * eff]` 之间随机波动，高骰部分会提前接触双曲线，使期望减伤曲线在分叉处实现**零折点的自然过渡**。
 - **`gamma = 1.00`（未溢出区间伤害期望与原版完全相同，但单次分布不同）**：
   当 `gamma = 1.0` 且护甲未发生溢出（`armour <= 100`）时，`eff_armour = armour * (N / D)`，平均减伤率为 `0.75 * armour * 0.01 * (N / D)`。乘以总伤害 `D` 后，期望伤害为 `D - N * (0.75 * armour * 0.01) = N * (1 - 0.75 * armour * 0.01) + A`，**数学期望与原版分毫不差**。
   但两者的**单次伤害分布不同**：原版只对非破甲部分 `N` 掷骰子，破甲部分 `A` 零波动全额穿透；而新算法是用缩放后的有效护甲对总伤害 `D` 统一掷骰，单次波动按比例平摊到整体伤害上，输出曲线更平滑。
@@ -131,14 +131,14 @@ With **Refined Armour Penetration**, armour is scaled by `(1 - p)` **first** to 
 
 在原版中，一旦护甲超过 `100`（例如 `120` 护甲掷骰区间为 `60% ~ 120%`），超出 `100%` 的部分会被强行截断为 `100%`；到了 `200` 护甲时非破甲伤害几乎每次都被 `100%` 格挡，导致高护甲面对混合伤害时很快触及收益死墙（例如面对 `50%` AP 攻击，原版最高只能减免 `50%` 总伤）。
 
-本 Mod 先按 `(1 - p)` 折算为有效护甲 `eff_armour`，再在高甲区平滑接入 `Hyperbolic(S = 20)`：即使面对 `50%` 破甲攻击，`120 ~ 200` 护甲依然能平滑、有意义地提供递进防护，既彻底消除了 `100+` 护甲的溢出失真，又不会让重甲彻底免疫伤害。
+本 Mod 先按 `(1 - p)` 折算为有效护甲 `eff_armour`，再在高甲区平滑接入 `Hyperbolic(S = 10)`：即使面对 `50%` 破甲攻击，`120 ~ 200` 护甲依然能平滑、有意义地提供递进防护，既彻底消除了 `100+` 护甲的溢出失真，又不会让重甲彻底免疫伤害。
 
 ### 50% AP 伤害占比下的减伤曲线对比与在线交互工具
 
 > **[点击打开在线交互式 2D 护甲与破甲曲线工具 (GitHub Pages)](https://iwakura-reinn.github.io/WHTW3-Refined-Armour-Penetration/)**  
 > 支持实时拖动 `gamma`、`lower_cap`、`Hyperbolic Step S`，自由切换 EHP / 减伤比例 / 边际导数纵轴及任意 `AP%` / `护甲` 切片（源码位于 `docs/index.html`）。
 
-| 目标护甲 | 原版平均减伤比 | `gamma = 1.0` | `gamma = 1.3, S = 20`（默认） | `gamma = 1.4, S = 20` |
+| 目标护甲 | 原版平均减伤比 | `gamma = 1.0` | `gamma = 1.3, S = 10`（默认） | `gamma = 1.4, S = 10` |
 |---:|---:|---:|---:|---:|
 | **0** | `0.00%` | `0.00%` | `0.00%` | `0.00%` |
 | **20** | `7.50%` | `7.50%` | `8.91%` | `9.32%` |
@@ -147,10 +147,10 @@ With **Refined Armour Penetration**, armour is scaled by `(1 - p)` **first** to 
 | **80** | `30.00%` | `30.00%` | `35.63%` | `37.26%` |
 | **100** | `37.50%` | `37.50%` | `44.54%` | `46.58%` |
 | **120** | `43.33%` *(开始溢出)* | `45.00%` | `53.45%` | `55.90%` |
-| **140** | `46.79%` *(严重溢出)* | `52.50%` | `62.28%` | `64.85%` |
-| **160** | `48.75%` *(严重溢出)* | `60.00%` | `69.64%` | `71.91%` |
-| **180** | `49.72%` *(接近死墙)* | `66.76%` | `75.37%` | `77.34%` |
-| **200** | `50.00%` *(封顶死墙)* | `72.22%` | `79.81%` | `81.49%` |
+| **140** | `46.79%` *(严重溢出)* | `52.50%` | `62.36%` | `65.21%` |
+| **160** | `48.75%` *(严重溢出)* | `60.00%` | `71.05%` | `73.80%` |
+| **180** | `49.72%` *(接近死墙)* | `66.76%` | `77.94%` | `80.27%` |
+| **200** | `50.00%` *(封顶死墙)* | `72.22%` | `83.15%` | `85.09%` |
 
 ### 原生注入原理与安全性说明
 

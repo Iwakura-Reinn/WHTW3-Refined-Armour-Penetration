@@ -42,11 +42,11 @@ opt_mode:add_dropdown_values({
 
 local opt_step = mct_mod:add_new_option("hyp_step", "slider")
 opt_step:set_text("Hyperbolic Step (S)", false)
-opt_step:set_tooltip_text("Armour step S for Hyperbolic / Combined mode: red = eff / (eff + S). Default: 20.", false)
+opt_step:set_tooltip_text("Armour step S for Hyperbolic / Combined mode: red = eff / (eff + S). Default: 10.", false)
 opt_step:slider_set_min_max(5, 150)
 opt_step:slider_set_step_size(5, 0)
 opt_step:slider_set_precision(0)
-opt_step:set_default_value(20)
+opt_step:set_default_value(10)
 
 local opt_mindmg = mct_mod:add_new_option("min_damage", "slider")
 opt_mindmg:set_text("Minimum Damage Floor")
