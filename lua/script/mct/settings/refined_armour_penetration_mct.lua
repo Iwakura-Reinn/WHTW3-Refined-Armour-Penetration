@@ -1,12 +1,14 @@
 -- refined_armour_penetration_mct.lua (script/mct/settings/refined_armour_penetration_mct.lua)
 -- Mod Configuration Tool (MCT) integration for Refined Armour Penetration.
 
+if not get_mct then return end
+local mct = get_mct()
 if not mct then return end
 
 local mct_mod = mct:register_mod("refined_armour_penetration")
-mct_mod:set_title("Refined Armour Penetration (AP Overhaul)")
-mct_mod:set_author("Iwakura-Reinn")
-mct_mod:set_description("Replaces vanilla two-part armour resolution with proportional AP penetration: p = (A / (N + A)) ^ gamma.")
+mct_mod:set_title("Refined Armour Penetration (AP Overhaul)", false)
+mct_mod:set_author("Iwakura-Reinn", false)
+mct_mod:set_description("Replaces vanilla two-part armour resolution with proportional AP penetration: p = (A / (N + A)) ^ gamma.", false)
 
 local opt_enabled = mct_mod:add_new_option("enabled", "checkbox")
 opt_enabled:set_text("Enable Mod")
