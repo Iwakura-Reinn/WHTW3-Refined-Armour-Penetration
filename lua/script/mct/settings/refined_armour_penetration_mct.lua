@@ -31,13 +31,22 @@ opt_lower:slider_set_step_size(0.05, 2)
 opt_lower:slider_set_precision(2)
 opt_lower:set_default_value(0.50)
 
-local opt_maxred = mct_mod:add_new_option("max_reduction", "slider")
-opt_maxred:set_text("Max Damage Reduction Cap")
-opt_maxred:set_tooltip_text("Maximum damage reduction percentage from armour (0.85 = 85% cap).")
-opt_maxred:slider_set_min_max(0.50, 1.00)
-opt_maxred:slider_set_step_size(0.05, 2)
-opt_maxred:slider_set_precision(2)
-opt_maxred:set_default_value(0.85)
+local opt_mode = mct_mod:add_new_option("armour_mode", "dropdown")
+opt_mode:set_text("Armour Reduction Mode", false)
+opt_mode:set_tooltip_text("Combined: min(Refined Linear, Hyperbolic) [Default]. Linear: uncapped random roll. Hyperbolic: deterministic eff / (eff + S).", false)
+opt_mode:add_dropdown_values({
+    { key = "combined",   text = "Combined: min(Linear, Hyperbolic)", tt = "Uses Refined Linear roll at low/mid armour, smoothly transitioning to Hyperbolic at high armour.", is_default = true },
+    { key = "linear",     text = "Refined Linear Only",               tt = "Uses uncapped Refined Linear random roll only.", is_default = false },
+    { key = "hyperbolic", text = "Hyperbolic Only",                   tt = "Uses deterministic eff_armour / (eff_armour + S) only.", is_default = false },
+})
+
+local opt_step = mct_mod:add_new_option("hyp_step", "slider")
+opt_step:set_text("Hyperbolic Step (S)", false)
+opt_step:set_tooltip_text("Armour step S for Hyperbolic / Combined mode: red = eff / (eff + S). Default: 20.", false)
+opt_step:slider_set_min_max(5, 150)
+opt_step:slider_set_step_size(5, 0)
+opt_step:slider_set_precision(0)
+opt_step:set_default_value(20)
 
 local opt_mindmg = mct_mod:add_new_option("min_damage", "slider")
 opt_mindmg:set_text("Minimum Damage Floor")

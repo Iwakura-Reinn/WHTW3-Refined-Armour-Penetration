@@ -17,11 +17,18 @@ local SETTINGS = {
     enabled = true,
     gamma = 1.30,
     lower_cap = 0.50,
-    max_reduction = 0.85,
+    armour_mode = "combined", -- "combined" (min), "linear", "hyperbolic"
+    hyp_step = 20,
     min_damage = 1.0,
     use_kv_lower_cap = false,
     diag_enabled = true,
     diag_interval_ms = 5000,
+}
+
+local MODE_MAP = {
+    combined = 0,
+    linear = 1,
+    hyperbolic = 2,
 }
 
 local api = {
@@ -47,12 +54,14 @@ local function apply_config(mod, enable_flag)
     end
     local en = enable_flag and 1 or 0
     local use_kv = SETTINGS.use_kv_lower_cap and 1 or 0
+    local mode_int = MODE_MAP[SETTINGS.armour_mode] or 0
     pcall(
         mod.configure,
         en,
         SETTINGS.gamma,
         SETTINGS.lower_cap,
-        SETTINGS.max_reduction,
+        mode_int,
+        SETTINGS.hyp_step,
         SETTINGS.min_damage,
         use_kv
     )
@@ -124,7 +133,8 @@ local function sync_from_mct(mct_mod)
     SETTINGS.enabled = get_opt("enabled", SETTINGS.enabled)
     SETTINGS.gamma = tonumber(get_opt("gamma", SETTINGS.gamma)) or SETTINGS.gamma
     SETTINGS.lower_cap = tonumber(get_opt("lower_cap", SETTINGS.lower_cap)) or SETTINGS.lower_cap
-    SETTINGS.max_reduction = tonumber(get_opt("max_reduction", SETTINGS.max_reduction)) or SETTINGS.max_reduction
+    SETTINGS.armour_mode = tostring(get_opt("armour_mode", SETTINGS.armour_mode))
+    SETTINGS.hyp_step = tonumber(get_opt("hyp_step", SETTINGS.hyp_step)) or SETTINGS.hyp_step
     SETTINGS.min_damage = tonumber(get_opt("min_damage", SETTINGS.min_damage)) or SETTINGS.min_damage
     SETTINGS.use_kv_lower_cap = get_opt("use_kv_lower_cap", SETTINGS.use_kv_lower_cap)
     SETTINGS.diag_enabled = get_opt("diag_enabled", SETTINGS.diag_enabled)

@@ -82,7 +82,8 @@ typedef struct {
     volatile LONG enabled;
     float gamma;
     float lower_cap;
-    float max_reduction;
+    int   mode;       /* 0 = min(linear, hyperbolic), 1 = linear only, 2 = hyperbolic only */
+    float hyp_step;   /* hyperbolic step S (default 20.0) */
     float min_damage;
     int   use_kv_lower_cap;
 } ArmourConfig;
@@ -91,7 +92,8 @@ static ArmourConfig g_cfg = {
     0,      /* enabled: off until battle script enables it */
     1.3f,   /* gamma */
     0.5f,   /* lower_cap */
-    0.85f,  /* max_reduction */
+    0,      /* mode: 0 = combined min(linear, hyperbolic) */
+    20.0f,  /* hyp_step */
     1.0f,   /* min_damage */
     0       /* use_kv_lower_cap */
 };
@@ -191,15 +193,27 @@ float rap_compute_armour_damage(
     /* Step 2: effective armour */
     float eff_armour = a_raw * (1.0f - p);
 
-    /* Step 3: capped linear armour roll */
+    /* Step 3: uncapped linear armour roll & hyperbolic curve */
     float lower = g_cfg.use_kv_lower_cap ? kv_lower_cap : g_cfg.lower_cap;
     if (lower < 0.0f) lower = 0.0f;
     if (lower > 1.0f) lower = 1.0f;
     float lo = eff_armour * lower;
     float roll = lo + u * (eff_armour - lo);
-    float red = roll * 0.01f;
-    if (red < 0.0f) red = 0.0f;
-    if (red > g_cfg.max_reduction) red = g_cfg.max_reduction;
+    float red_lin = roll * 0.01f;
+    if (red_lin < 0.0f) red_lin = 0.0f;
+    if (red_lin > 1.0f) red_lin = 1.0f;
+
+    float step = (g_cfg.hyp_step > 0.1f) ? g_cfg.hyp_step : 20.0f;
+    float red_hyp = (eff_armour > 0.0f) ? (eff_armour / (eff_armour + step)) : 0.0f;
+
+    float red;
+    if (g_cfg.mode == 1) {
+        red = red_lin;
+    } else if (g_cfg.mode == 2) {
+        red = red_hyp;
+    } else {
+        red = (red_lin < red_hyp) ? red_lin : red_hyp;
+    }
 
     float new_dmg = D * (1.0f - red);
     if (new_dmg < 0.0f) new_dmg = 0.0f;
@@ -526,15 +540,19 @@ static int l_configure(lua_State *L) {
         if (lc >= 0.0f && lc <= 1.0f) g_cfg.lower_cap = lc;
     }
     if (n >= 4 && g_lua.type(L, 4) != 0) {
-        float mr = (float)g_lua.tonumber(L, 4);
-        if (mr >= 0.0f && mr <= 1.0f) g_cfg.max_reduction = mr;
+        int m = (int)g_lua.tointeger(L, 4);
+        if (m >= 0 && m <= 2) g_cfg.mode = m;
     }
     if (n >= 5 && g_lua.type(L, 5) != 0) {
-        float md = (float)g_lua.tonumber(L, 5);
-        if (md >= 0.0f && md <= 100.0f) g_cfg.min_damage = md;
+        float hs = (float)g_lua.tonumber(L, 5);
+        if (hs >= 1.0f && hs <= 500.0f) g_cfg.hyp_step = hs;
     }
     if (n >= 6 && g_lua.type(L, 6) != 0) {
-        g_cfg.use_kv_lower_cap = (g_lua.tointeger(L, 6) != 0) ? 1 : 0;
+        float md = (float)g_lua.tonumber(L, 6);
+        if (md >= 0.0f && md <= 100.0f) g_cfg.min_damage = md;
+    }
+    if (n >= 7 && g_lua.type(L, 7) != 0) {
+        g_cfg.use_kv_lower_cap = (g_lua.tointeger(L, 7) != 0) ? 1 : 0;
     }
     g_lua.pushboolean(L, 1);
     return 1;
@@ -555,15 +573,16 @@ static int l_diag_text(lua_State *L) {
     double avg_p = sc > 0 ? (g_stats.sum_pen_ratio / (double)sc) * 100.0 : 0.0;
     double avg_a = sc > 0 ? g_stats.sum_raw_armour / (double)sc : 0.0;
     double avg_e = sc > 0 ? g_stats.sum_eff_armour / (double)sc : 0.0;
+    const char *mode_name = (g_cfg.mode == 1) ? "linear" : ((g_cfg.mode == 2) ? "hyperbolic" : "combined");
 
     pos += snprintf(buf + pos, sizeof(buf) - pos,
         "Refined Armour Penetration v%d | installed=%d enabled=%d\n"
-        "config: gamma=%.2f lower_cap=%.2f max_red=%.2f min_dmg=%.1f use_kv_lower=%d\n"
+        "config: mode=%s gamma=%.2f lower_cap=%.2f hyp_step=%.1f min_dmg=%.1f use_kv_lower=%d\n"
         "calls:  s0=%I64d(act=%I64d) s1=%I64d(act=%I64d) s2=%I64d(act=%I64d)\n"
         "totals: samples=%I64d avg_vanilla=%.2f avg_new=%.2f avg_pen=%.1f%% avg_armour=%.1f->%.1f\n"
         "recent samples (site | N+A | arm | pen%% | eff_arm | red%% | vanilla -> new):\n",
         RAP_VERSION, g_all_installed, (int)g_cfg.enabled,
-        (double)g_cfg.gamma, (double)g_cfg.lower_cap, (double)g_cfg.max_reduction, (double)g_cfg.min_damage, g_cfg.use_kv_lower_cap,
+        mode_name, (double)g_cfg.gamma, (double)g_cfg.lower_cap, (double)g_cfg.hyp_step, (double)g_cfg.min_damage, g_cfg.use_kv_lower_cap,
         (long long)g_stats.calls[0], (long long)g_stats.active_calls[0],
         (long long)g_stats.calls[1], (long long)g_stats.active_calls[1],
         (long long)g_stats.calls[2], (long long)g_stats.active_calls[2],
