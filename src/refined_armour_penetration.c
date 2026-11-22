@@ -1,14 +1,12 @@
 /*
  * refined_armour_penetration.c - Total War: WARHAMMER III Refined Armour Penetration (AP Overhaul)
  *
- * Replaces vanilla two-part (base + AP) armour resolution at all 3 battle damage sites:
- *   D = N + A
- *   r = clamp(A / D, 0, 1)
- *   p = r ^ gamma
- *   eff_armour = armour * (1 - p)
- *   roll = uniform(eff_armour * lower_cap, eff_armour)
- *   red  = clamp(roll * 0.01, 0, max_reduction)
- *   dmg  = max(min_damage, D * (1 - red))
+ * Replaces vanilla two-part armour resolution at all 3 battle damage sites with
+ * Two-Term Cushioned AP:
+ *   DMG(N, A, M) = N * (1 - red(M)) + A * (1 - red(c_ap * M))
+ * where red(m) = min(red_lin(m), red_hyp(m)) in Combined mode:
+ *   red_lin(m) = clamp(uniform(m * lower_cap, m) * 0.01, 0, 1)
+ *   red_hyp(m) = m / (m + hyp_step)
  *
  * Build (MinGW-w64 x86_64):
  *   gcc -shared -O2 -Wall -Wextra -o refined_armour_penetration_v1.dll refined_armour_penetration.c -lm
@@ -80,17 +78,17 @@ static int resolve_lua_api(void) {
 
 typedef struct {
     volatile LONG enabled;
-    float gamma;
+    float ap_armour_factor; /* c_ap: fraction of target armour applied to AP damage (default 0.25) */
     float lower_cap;
-    int   mode;       /* 0 = min(linear, hyperbolic), 1 = linear only, 2 = hyperbolic only */
-    float hyp_step;   /* hyperbolic step S (default 20.0) */
+    int   mode;             /* 0 = min(linear, hyperbolic), 1 = linear only, 2 = hyperbolic only */
+    float hyp_step;         /* hyperbolic step S (default 20.0) */
     float min_damage;
     int   use_kv_lower_cap;
 } ArmourConfig;
 
 static ArmourConfig g_cfg = {
     0,      /* enabled: off until battle script enables it */
-    1.3f,   /* gamma */
+    0.25f,  /* ap_armour_factor */
     0.65f,  /* lower_cap */
     0,      /* mode: 0 = combined min(linear, hyperbolic) */
     20.0f,  /* hyp_step */
@@ -103,8 +101,8 @@ typedef struct {
     volatile LONG64 active_calls[3];
     double sum_vanilla_dmg;
     double sum_new_dmg;
-    double sum_pen_ratio;
-    double sum_eff_armour;
+    double sum_red_base;
+    double sum_red_ap;
     double sum_raw_armour;
     LONG64 sample_count;
 } ArmourStats;
@@ -114,9 +112,8 @@ typedef struct {
     float N;
     float A;
     int   armour;
-    float p;
-    float eff_armour;
-    float red;
+    float red_base;
+    float red_ap;
     float vanilla_dmg;
     float new_dmg;
 } DamageSample;
@@ -133,6 +130,22 @@ static void reset_stats(void) {
 }
 
 /* ---------- Core damage formula (called from assembly stubs) ---------- */
+
+static float compute_reduction(float eff_armour, float lower, float u, float step, int mode) {
+    if (eff_armour <= 0.0f) return 0.0f;
+
+    float lo = eff_armour * lower;
+    float roll = lo + u * (eff_armour - lo);
+    float red_lin = roll * 0.01f;
+    if (red_lin < 0.0f) red_lin = 0.0f;
+    if (red_lin > 1.0f) red_lin = 1.0f;
+
+    float red_hyp = eff_armour / (eff_armour + step);
+
+    if (mode == 1) return red_lin;
+    if (mode == 2) return red_hyp;
+    return (red_lin < red_hyp) ? red_lin : red_hyp;
+}
 
 float rap_compute_armour_damage(
     int site_id,
@@ -177,45 +190,19 @@ float rap_compute_armour_damage(
         return 0.0f;
     }
 
-    /* Step 1: penetration ratio p = (A / D)^gamma */
-    float r = A / D;
-    if (r < 0.0f) r = 0.0f;
-    if (r > 1.0f) r = 1.0f;
-    float p;
-    if (r <= 0.0f) {
-        p = 0.0f;
-    } else if (r >= 1.0f) {
-        p = 1.0f;
-    } else {
-        p = powf(r, g_cfg.gamma);
-    }
-
-    /* Step 2: effective armour */
-    float eff_armour = a_raw * (1.0f - p);
-
-    /* Step 3: uncapped linear armour roll & hyperbolic curve */
     float lower = g_cfg.use_kv_lower_cap ? kv_lower_cap : g_cfg.lower_cap;
     if (lower < 0.0f) lower = 0.0f;
     if (lower > 1.0f) lower = 1.0f;
-    float lo = eff_armour * lower;
-    float roll = lo + u * (eff_armour - lo);
-    float red_lin = roll * 0.01f;
-    if (red_lin < 0.0f) red_lin = 0.0f;
-    if (red_lin > 1.0f) red_lin = 1.0f;
 
     float step = (g_cfg.hyp_step > 0.1f) ? g_cfg.hyp_step : 20.0f;
-    float red_hyp = (eff_armour > 0.0f) ? (eff_armour / (eff_armour + step)) : 0.0f;
 
-    float red;
-    if (g_cfg.mode == 1) {
-        red = red_lin;
-    } else if (g_cfg.mode == 2) {
-        red = red_hyp;
-    } else {
-        red = (red_lin < red_hyp) ? red_lin : red_hyp;
-    }
+    /* Two-Term Cushioned AP: DMG = N * (1 - red(M)) + A * (1 - red(c_ap * M)) */
+    float red_base = compute_reduction(a_raw, lower, u, step, g_cfg.mode);
+    float red_ap   = compute_reduction(a_raw * g_cfg.ap_armour_factor, lower, u, step, g_cfg.mode);
 
-    float new_dmg = D * (1.0f - red);
+    float n_part = (N > 0.0f) ? (N * (1.0f - red_base)) : 0.0f;
+    float a_part = (A > 0.0f) ? (A * (1.0f - red_ap)) : 0.0f;
+    float new_dmg = n_part + a_part;
     if (new_dmg < 0.0f) new_dmg = 0.0f;
     if (g_cfg.min_damage > 0.0f && new_dmg < g_cfg.min_damage) {
         new_dmg = g_cfg.min_damage;
@@ -223,8 +210,8 @@ float rap_compute_armour_damage(
 
     g_stats.sum_vanilla_dmg += (double)v_total;
     g_stats.sum_new_dmg += (double)new_dmg;
-    g_stats.sum_pen_ratio += (double)p;
-    g_stats.sum_eff_armour += (double)eff_armour;
+    g_stats.sum_red_base += (double)red_base;
+    g_stats.sum_red_ap += (double)red_ap;
     g_stats.sum_raw_armour += (double)a_raw;
     g_stats.sample_count++;
 
@@ -234,9 +221,8 @@ float rap_compute_armour_damage(
     s->N = N;
     s->A = A;
     s->armour = armour;
-    s->p = p;
-    s->eff_armour = eff_armour;
-    s->red = red;
+    s->red_base = red_base;
+    s->red_ap = red_ap;
     s->vanilla_dmg = v_total;
     s->new_dmg = new_dmg;
 
@@ -532,8 +518,8 @@ static int l_configure(lua_State *L) {
         g_cfg.enabled = (g_lua.tointeger(L, 1) != 0) ? 1 : 0;
     }
     if (n >= 2 && g_lua.type(L, 2) != 0) {
-        float g = (float)g_lua.tonumber(L, 2);
-        if (g >= 0.1f && g <= 5.0f) g_cfg.gamma = g;
+        float c = (float)g_lua.tonumber(L, 2);
+        if (c >= 0.0f && c <= 1.0f) g_cfg.ap_armour_factor = c;
     }
     if (n >= 3 && g_lua.type(L, 3) != 0) {
         float lc = (float)g_lua.tonumber(L, 3);
@@ -570,32 +556,32 @@ static int l_diag_text(lua_State *L) {
     LONG64 sc = g_stats.sample_count;
     double avg_v = sc > 0 ? g_stats.sum_vanilla_dmg / (double)sc : 0.0;
     double avg_n = sc > 0 ? g_stats.sum_new_dmg / (double)sc : 0.0;
-    double avg_p = sc > 0 ? (g_stats.sum_pen_ratio / (double)sc) * 100.0 : 0.0;
+    double avg_rb = sc > 0 ? (g_stats.sum_red_base / (double)sc) * 100.0 : 0.0;
+    double avg_ra = sc > 0 ? (g_stats.sum_red_ap / (double)sc) * 100.0 : 0.0;
     double avg_a = sc > 0 ? g_stats.sum_raw_armour / (double)sc : 0.0;
-    double avg_e = sc > 0 ? g_stats.sum_eff_armour / (double)sc : 0.0;
     const char *mode_name = (g_cfg.mode == 1) ? "linear" : ((g_cfg.mode == 2) ? "hyperbolic" : "combined");
 
     pos += snprintf(buf + pos, sizeof(buf) - pos,
-        "Refined Armour Penetration v%d | installed=%d enabled=%d\n"
-        "config: mode=%s gamma=%.2f lower_cap=%.2f hyp_step=%.1f min_dmg=%.1f use_kv_lower=%d\n"
+        "Refined Armour Penetration v%d (Two-Term Cushioned AP) | installed=%d enabled=%d\n"
+        "config: mode=%s c_ap=%.2f lower_cap=%.2f hyp_step=%.1f min_dmg=%.1f use_kv_lower=%d\n"
         "calls:  s0=%I64d(act=%I64d) s1=%I64d(act=%I64d) s2=%I64d(act=%I64d)\n"
-        "totals: samples=%I64d avg_vanilla=%.2f avg_new=%.2f avg_pen=%.1f%% avg_armour=%.1f->%.1f\n"
-        "recent samples (site | N+A | arm | pen%% | eff_arm | red%% | vanilla -> new):\n",
+        "totals: samples=%I64d avg_vanilla=%.2f avg_new=%.2f avg_armour=%.1f avg_red_n=%.1f%% avg_red_ap=%.1f%%\n"
+        "recent samples (site | N+A | arm | red_n%% | red_ap%% | vanilla -> new):\n",
         RAP_VERSION, g_all_installed, (int)g_cfg.enabled,
-        mode_name, (double)g_cfg.gamma, (double)g_cfg.lower_cap, (double)g_cfg.hyp_step, (double)g_cfg.min_damage, g_cfg.use_kv_lower_cap,
+        mode_name, (double)g_cfg.ap_armour_factor, (double)g_cfg.lower_cap, (double)g_cfg.hyp_step, (double)g_cfg.min_damage, g_cfg.use_kv_lower_cap,
         (long long)g_stats.calls[0], (long long)g_stats.active_calls[0],
         (long long)g_stats.calls[1], (long long)g_stats.active_calls[1],
         (long long)g_stats.calls[2], (long long)g_stats.active_calls[2],
-        (long long)sc, avg_v, avg_n, avg_p, avg_a, avg_e);
+        (long long)sc, avg_v, avg_n, avg_a, avg_rb, avg_ra);
 
     LONG idx = g_sample_idx;
     int show = (idx < 8) ? (int)idx : 8;
     for (int i = 0; i < show && pos < (int)sizeof(buf) - 128; i++) {
         DamageSample *s = &g_samples[(idx - 1 - i) & (MAX_SAMPLES - 1)];
         pos += snprintf(buf + pos, sizeof(buf) - pos,
-            "  s%d | %.1f+%.1f | arm=%d | pen=%.1f%% | eff=%.1f | red=%.1f%% | %.1f -> %.1f\n",
+            "  s%d | %.1f+%.1f | arm=%d | red_n=%.1f%% | red_ap=%.1f%% | %.1f -> %.1f\n",
             s->site, (double)s->N, (double)s->A, s->armour,
-            (double)s->p * 100.0, (double)s->eff_armour, (double)s->red * 100.0,
+            (double)s->red_base * 100.0, (double)s->red_ap * 100.0,
             (double)s->vanilla_dmg, (double)s->new_dmg);
     }
 

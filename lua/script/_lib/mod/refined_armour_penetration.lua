@@ -1,12 +1,10 @@
 -- refined_armour_penetration.lua (script/_lib/mod/refined_armour_penetration.lua)
--- Refined Armour Penetration (AP Overhaul):
---   D = N + A
---   r = clamp(A / D, 0, 1)
---   p = r ^ gamma
---   eff_armour = armour * (1 - p)
---   roll = uniform(eff_armour * lower_cap, eff_armour)
---   red  = clamp(roll * 0.01, 0, max_reduction)
---   dmg  = max(min_damage, D * (1 - red))
+-- Refined Armour Penetration (Two-Term Cushioned AP):
+--   DMG(N, A, M) = N * (1 - red(M)) + A * (1 - red(c_ap * M))
+--   red(m) = min(red_lin(m), red_hyp(m)) in Combined mode:
+--     red_lin(m) = clamp(uniform(m * lower_cap, m) * 0.01, 0, 1)
+--     red_hyp(m) = m / (m + hyp_step)
+--   dmg = max(min_damage, DMG)
 
 local VERSION = 1
 local MODULE = "refined_armour_penetration_v1"
@@ -15,7 +13,7 @@ local BIN_MODULE = "refined_armour_penetration_bin"
 
 local SETTINGS = {
     enabled = true,
-    gamma = 1.30,
+    ap_armour_factor = 0.25,
     lower_cap = 0.65,
     armour_mode = "combined", -- "combined" (min), "linear", "hyperbolic"
     hyp_step = 20,
@@ -58,7 +56,7 @@ local function apply_config(mod, enable_flag)
     pcall(
         mod.configure,
         en,
-        SETTINGS.gamma,
+        SETTINGS.ap_armour_factor,
         SETTINGS.lower_cap,
         mode_int,
         SETTINGS.hyp_step,
@@ -143,7 +141,7 @@ local function sync_from_mct(mct_mod)
     end
 
     SETTINGS.enabled = get_opt("enabled", SETTINGS.enabled)
-    SETTINGS.gamma = tonumber(get_opt("gamma", SETTINGS.gamma)) or SETTINGS.gamma
+    SETTINGS.ap_armour_factor = tonumber(get_opt("ap_armour_factor", SETTINGS.ap_armour_factor)) or SETTINGS.ap_armour_factor
     SETTINGS.lower_cap = tonumber(get_opt("lower_cap", SETTINGS.lower_cap)) or SETTINGS.lower_cap
     SETTINGS.armour_mode = tostring(get_opt("armour_mode", SETTINGS.armour_mode))
     SETTINGS.hyp_step = tonumber(get_opt("hyp_step", SETTINGS.hyp_step)) or SETTINGS.hyp_step

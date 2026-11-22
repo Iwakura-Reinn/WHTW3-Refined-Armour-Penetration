@@ -9,81 +9,77 @@
 
 ### Overview
 
-In vanilla WARHAMMER III, Armour-Piercing (AP) damage `A` completely ignores armour, while non-AP damage `N` is reduced independently (`N * (1 - red) + A`). This leads to two well-known issues:
-1. Low-AP elite units (e.g. heavy cavalry or non-AP infantry) struggle disproportionately against high-armour targets.
-2. High-armour targets (`100+` Armour) suffer from **armour overflow** on the non-AP portion — once the random roll exceeds `100%`, extra armour hits a hard wall and yields rapidly diminishing returns.
+In vanilla WARHAMMER III, Armour-Piercing (AP) damage `A` completely ignores armour (`0%` reduction regardless of how heavy the target is), while non-AP damage `N` is reduced by a linear roll clamped at `100%`:
 
-**Refined Armour Penetration** replaces the vanilla two-part armour resolution at all three battle damage sites (melee/collision struct, and both integer missile/direct damage sites) with a **unified proportional penetration model** and a smooth high-armour transition.
+- **Vanilla**: `DMG = N * (1 - clamp(roll(0.5 * M, M) * 0.01, 0, 1)) + A`
 
-### Armour Algorithm
+This causes two long-standing issues:
+1. **High-armour overflow & hard wall (`100+` Armour)**: Once `roll` exceeds `100%`, extra armour is clipped away. Against a `50%` AP attack, `200` Armour hits a hard ceiling of `50%` total reduction.
+2. **All-or-nothing AP immunity**: Even `180–200` Armour units take full `100%` AP damage with zero mitigation, making heavy armour feel brittle against AP-heavy armies.
+
+**Refined Armour Penetration** replaces the vanilla armour resolution at all three battle damage sites (melee/collision struct, and both integer missile/direct damage sites) with **Two-Term Cushioned AP** and a smooth high-armour tail.
+
+*(Design note: earlier prototypes explored a single-term proportional AP-ratio formula `p = (A / D)^gamma`, which was later replaced by the cleaner, strictly monotonic Two-Term Cushioned AP model below.)*
+
+### Armour Algorithm: Two-Term Cushioned AP
 
 Let:
 - `N` = Base (non-AP) damage
 - `A` = Armour-Piercing (AP) damage
-- `D = N + A` = Total raw damage
-- `armour` = Target's armour value
+- `M` = Target's armour value
 
-The formula computes:
-1. **AP Ratio**: `r = clamp(A / D, 0, 1)`
-2. **Penetration Factor**: `p = r ^ gamma` (default `gamma = 1.30`)
-3. **Effective Armour**: `eff_armour = armour * (1 - p)`
-4. **Two Reduction Curves**:
-   - **Refined Linear Roll (Uncapped)**: `roll = uniform(eff_armour * lower_cap, eff_armour)`, `red_lin = clamp(roll * 0.01, 0, 1)` (default `lower_cap = 0.65`)
-   - **Hyperbolic Curve**: `red_hyp = eff_armour / (eff_armour + S)` (default `S = 20`)
-5. **Mode Selection (configurable in MCT)**:
-   - **`Combined` (Default)**: `red = min(red_lin, red_hyp)`
-   - **`Refined Linear Only`**: `red = red_lin`
-   - **`Hyperbolic Only`**: `red = red_hyp`
-6. **Final Damage**: `dmg = max(min_damage, D * (1 - red))` (default `min_damage = 1.0`)
+For any effective armour `m`, define the reduction curve `red(m)`:
+1. **Refined Linear Roll (Uncapped)**: `roll(m) = uniform(m * lower_cap, m)`, `red_lin(m) = clamp(roll(m) * 0.01, 0, 1)` *(default `lower_cap = 0.65`)*
+2. **Hyperbolic Tail**: `red_hyp(m) = m / (m + S)` *(default `S = 20`)*
+3. **Mode Selection (configurable in MCT)**:
+   - **`Combined` (Default)**: `red(m) = min(red_lin(m), red_hyp(m))`
+   - **`Refined Linear Only`**: `red(m) = red_lin(m)`
+   - **`Hyperbolic Only`**: `red(m) = red_hyp(m)`
 
-### Understanding `gamma`, `Combined` Mode & Combat Feel
+Final damage is computed as:
+- **`DMG(N, A, M) = max(min_damage, N * (1 - red(M)) + A * (1 - red(c_ap * M)))`** *(default `c_ap = 0.25`, `min_damage = 1.0`)*
 
-- **Why `min(Refined Linear, Hyperbolic(20))`?**
-  Instead of imposing an abrupt hard cap (like a flat 85% wall), taking `min(red_lin, red_hyp)` preserves the tactile **linear-roll** curve across low/mid effective armour (`0 – 100`), and then **smoothly transitions into `Hyperbolic(S = 20)`** at high effective armour (`100+`). Notice that because `red_lin` is a random roll in `[0.65*eff, 1.0*eff]`, its upper rolls begin touching `red_hyp` slightly earlier (~`eff = 75–85`), creating a completely seamless, kink-free transition into diminishing returns.
-- **`gamma = 1.00` (Mathematically Same Expected Damage as Vanilla below 100 Armour, Different Variance)**:
-  When `gamma = 1.0` and armour does not overflow (`armour <= 100`), `eff_armour = armour * (N / D)`, so the average damage reduction is `0.75 * armour * 0.01 * (N / D)`. Multiplying by total damage `D` yields `D - N * (0.75 * armour * 0.01) = N * (1 - 0.75 * armour * 0.01) + A`, which has **the exact same expected damage as vanilla**.
-  However, **the single-hit distribution is different**: vanilla rolls RNG only on `N` while `A` is deterministic, whereas the refined model rolls RNG across total damage `D` using `eff_armour`.
-- **`gamma = 1.30` (Default — Tactile Heavy-Armour Feel)**:
-  Slightly curves penetration downward for mixed/low-AP weapons (`50%` AP -> `40.6%` penetration instead of `50%`). Heavy armour (`80–140+`) feels noticeably sturdier against generalists and chaff, while dedicated AP weapons (`70%+` AP) retain clear, decisive authority.
-- **`gamma = 1.40+` (Hardcore Armour Differentiation)**:
-  Widens the gap between true AP specialists and hybrid weapons (`50%` AP -> `37.9%` penetration).
+### Key Differences vs. Vanilla
 
-### Solving Vanilla Armour Overflow (`100+` Armour)
+| Aspect | Vanilla | Refined Armour Penetration (Two-Term Cushioned AP) |
+|---|---|---|
+| **Base Damage `N`** | `roll(0.5 * M, M)`, clamped at `100%` | `min(Linear(0.65 * M, M), M / (M + 20))` — stronger mid-armour floor (`0.65` vs `0.50`), smooth high-armour tail without `100+` overflow |
+| **AP Damage `A`** | `100%` ignores armour (`c_ap = 0`) | Cushioned by `c_ap * M` (default `c_ap = 0.25`), so heavy armour meaningfully mitigates AP without invalidating it |
+| **Monotonicity** | Can plateau at `100+` Armour | Strictly increases EHP with Armour (`dEHP/dM > 0`), and strictly increases damage when adding either `N` or `A` (`dDMG/dN > 0`, `dDMG/dA > 0`) |
+| **High-Armour Feel** | `120–200` Armour wastes rolls above `100%` | `120–200` Armour smoothly scales both `N` and `A` mitigation without ever reaching `100%` invulnerability |
 
-In vanilla, an `Armour = 120` unit rolls between `60%` and `120%` reduction on non-AP damage `N`, and anything above `100%` is clamped away. By `Armour = 200`, non-AP damage is `100%` blocked on every roll, hitting a hard ceiling at `N / D` (`50%` total reduction against a `50%` AP attack).
-
-With **Refined Armour Penetration**, armour is scaled by `(1 - p)` **first** to obtain `eff_armour`, and high effective armour smoothly enters the `Hyperbolic(S = 20)` tail (`eff / (eff + 20)`), so `120–200` armour continues to provide meaningful, smooth protection without ever becoming 100% invulnerable.
-
-### Reduction Curve & Interactive Explorer: `ratio = f(Armour)` at `50%` AP Share (`N = 50, A = 50`)
+### Reduction Curve Comparison & Interactive Explorer
 
 > **[Open Interactive 2D Armour & AP Curve Explorer (GitHub Pages)](https://iwakura-reinn.github.io/WHTW3-Refined-Armour-Penetration/)**  
-> Tune `gamma`, `lower_cap`, and `Hyperbolic Step S` in real time, switch between EHP / Reduction % / Marginal Derivative, or inspect any `(Armour, AP%)` slice (`docs/index.html`).
+> Tune `c_ap`, `lower_cap`, and `Hyperbolic Step S` in real time, switch between EHP / Reduction % / Marginal Derivative, or inspect any `(Armour, AP%)` slice (`docs/index.html`).
 
-| Target Armour | Vanilla Avg Reduction | `gamma = 1.0` *(lc=0.5)* | `gamma = 1.3, lc = 0.65, S = 20` (Default) | `gamma = 1.4, lc = 0.65, S = 20` |
-|---:|---:|---:|---:|---:|
-| **0** | `0.00%` | `0.00%` | `0.00%` | `0.00%` |
-| **20** | `7.50%` | `7.50%` | `9.80%` | `10.25%` |
-| **40** | `15.00%` | `15.00%` | `19.60%` | `20.50%` |
-| **60** | `22.50%` | `22.50%` | `29.40%` | `30.74%` |
-| **80** | `30.00%` | `30.00%` | `39.20%` | `40.99%` |
-| **100** | `37.50%` | `37.50%` | `48.99%` | `51.24%` |
-| **120** | `43.33%` *(overflows)* | `45.00%` | `58.79%` | `61.49%` |
-| **140** | `46.79%` *(overflows)* | `52.50%` | `68.48%` | `71.21%` |
-| **160** | `48.75%` *(overflows)* | `60.00%` | `76.08%` | `78.24%` |
-| **180** | `49.72%` *(overflows)* | `66.76%` | `81.33%` | `82.94%` |
-| **200** | `50.00%` *(hard wall)* | `72.22%` | `84.74%` | `85.80%` |
+| Target Armour | Vanilla Avg (`50%` AP) | Two-Term `c_ap = 0.25` (`50%` AP) | Two-Term `c_ap = 0.25` (`100%` AP) |
+|---:|---:|---:|---:|
+| **0** | `0.00%` | `0.00%` | `0.00%` |
+| **20** | `7.50%` | `10.31%` | `4.12%` |
+| **40** | `15.00%` | `20.62%` | `8.25%` |
+| **60** | `22.50%` | `30.94%` | `12.38%` |
+| **80** | `30.00%` | `41.25%` | `16.50%` |
+| **100** | `37.50%` | `49.58%` | `20.62%` |
+| **120** | `43.33%` *(overflows)* | `54.88%` | `24.75%` |
+| **140** | `46.79%` *(overflows)* | `58.19%` | `28.88%` |
+| **160** | `48.75%` *(overflows)* | `60.94%` | `33.00%` |
+| **180** | `49.72%` *(overflows)* | `63.56%` | `37.12%` |
+| **200** | `50.00%` *(hard wall)* | `66.08%` | `41.25%` |
+
+*(Default parameters: `c_ap = 0.25`, `lower_cap = 0.65`, `S = 20`, `Combined` mode.)*
 
 ### How Native Injection Works (Open-Source Transparency)
 
 - Because WARHAMMER III's armour formula is compiled in native C++ (`Warhammer3.exe`), Lua scripts alone cannot change it.
-- This mod compiles a tiny (~61 KB) open-source Windows DLL (`refined_armour_penetration_v1.dll`) embedded inside the `.pack` as hex data (`refined_armour_penetration_bin.lua`).
-- On startup, the Lua script checks if `refined_armour_penetration_v1.dll` exists in the game root with the exact expected byte size; if not, it writes it out once and loads it via `require`.
+- This mod compiles a tiny (~56 KB) open-source Windows DLL (`refined_armour_penetration_v1.dll`) embedded inside the `.pack` as hex data (`refined_armour_penetration_bin.lua`).
+- On startup, the Lua script checks if `refined_armour_penetration_v1.dll` exists in the game root with the exact expected size and SHA-256 tag; if not, it writes it out once and loads it via `require`.
 - The DLL uses **signature pattern scanning** (no hardcoded addresses) to hook the 3 armour roll call sites in memory when a battle begins, and cleanly restores them when exiting.
 - **No external network calls, no registry edits, no background processes.** Full C source is in `src/refined_armour_penetration.c`.
 
 ### MCT Options & Compatibility
 
-- **Mod Configuration Tool (MCT)**: Tune `enabled`, `armour_mode` (`Combined`, `Refined Linear Only`, `Hyperbolic Only`), `gamma`, `lower_cap`, `hyp_step` (`S`), `min_damage`, `use_kv_lower_cap`, and `diag_enabled` in-game without restarting. Works out-of-the-box without MCT using defaults.
+- **Mod Configuration Tool (MCT)**: Tune `enabled`, `armour_mode` (`Combined`, `Refined Linear Only`, `Hyperbolic Only`), `ap_armour_factor` (`c_ap`), `lower_cap`, `hyp_step` (`S`), `min_damage`, `use_kv_lower_cap`, and `diag_enabled` in-game without restarting. Works out-of-the-box without MCT using defaults.
 - **Compatibility**: Compatible with almost all unit/overhaul mods (does not touch DB tables).
 - **Platform**: **Windows x86_64 only**. Mac/Linux users will safely fall back to vanilla behaviour without crashing.
 - **Multiplayer**: Both players must enable the mod with identical MCT settings to avoid desyncs.
@@ -94,73 +90,70 @@ With **Refined Armour Penetration**, armour is scaled by `(1 - p)` **first** to 
 
 ### 简介
 
-在《全面战争：战锤 3》原版机制中，破甲伤害 `A` 完全无视护甲，而非破甲伤害 `N` 单独结算护甲减免（`N * (1 - red) + A`）。这带来了两个核心问题：
-1. 破甲与非破甲两段伤害完全割裂，高破甲武器无法帮助同一次攻击中的非破甲部分穿透护甲。
-2. 当目标护甲超过 `100` 时，非破甲部分会出现严重的**护甲溢出**（掷骰超过 `100%` 的部分直接被截断浪费），高护甲收益迅速递减并撞上死板上限。
+在《全面战争：战锤 3》原版机制中，破甲伤害 `A` 完全无视护甲（无论目标护甲多高都是 `0%` 减免），而非破甲伤害 `N` 单独按 `[0.5 * M, M]` 掷骰并在 `100%` 处硬截断：
 
-**Refined Armour Penetration** 在底层战斗伤害结算的 3 个入口点，将原版两段式结算替换为**统一的比例破甲公式**，并在高护甲段平滑过渡到双曲收益曲线。
+- **原版公式**：`DMG = N * (1 - clamp(roll(0.5 * M, M) * 0.01, 0, 1)) + A`
 
-### 护甲算法公式
+这带来了两个长期存在的问题：
+1. **高甲溢出与死墙（`100+` 护甲）**：护甲超过 `100` 后，超出 `100%` 的掷骰区间被直接截断浪费；面对 `50%` AP 攻击时，即使堆到 `200` 护甲也只能卡死在 `50%` 总减伤上限。
+2. **破甲部分完全免疫护甲**：哪怕面对 `180–200` 护甲的重装单位，AP 伤害依然是 `0%` 减免，导致高甲单位在后期高破甲环境下显得非常脆弱。
 
-设单次攻击基础伤害为 `N`，破甲伤害为 `A`，总面板伤害 `D = N + A`，目标护甲为 `armour`：
-1. **破甲占比**：`r = clamp(A / D, 0, 1)`
-2. **穿透系数**：`p = r ^ gamma`（默认 `gamma = 1.30`）
-3. **有效护甲**：`eff_armour = armour * (1 - p)`
-4. **两条减伤曲线**：
-   - **线性掷骰（无硬上限）**：`roll = uniform(eff_armour * lower_cap, eff_armour)`，`red_lin = clamp(roll * 0.01, 0, 1)`（默认 `lower_cap = 0.65`）
-   - **双曲减伤**：`red_hyp = eff_armour / (eff_armour + S)`（默认 `S = 20`）
-5. **模式选择（可在 MCT 切换）**：
-   - **`Combined`（默认）**：`red = min(red_lin, red_hyp)`
-   - **`Refined Linear Only`**：`red = red_lin`
-   - **`Hyperbolic Only`**：`red = red_hyp`
-6. **最终伤害**：`dmg = max(min_damage, D * (1 - red))`（默认保底 `min_damage = 1.0`）
+**Refined Armour Penetration** 在底层战斗伤害结算的 3 个入口点，将原版护甲结算替换为**两段独立缓冲公式（Two-Term Cushioned AP）**，并引入平滑的高护甲双曲过渡。
 
-### `gamma` 旋钮、结合模式与手感解析
+*（附注：此前我们曾探索过按 `p = (A / D)^gamma` 统一折算有效护甲的方案；最终替换为下方更直观、在所有伤害与护甲区间均严格单调的两段缓冲模型。）*
 
-- **为什么默认采用 `min(线性掷骰, 双曲(20))`？**
-  相比一刀切的 `85%` 硬封顶，取 `min(red_lin, red_hyp)` 可以在中低有效护甲段（`0 ~ 100`）完整保留线性的“重甲门槛与加速质感”，而在高有效护甲段（`100+`）平滑切入 `Hyperbolic(S = 20)` 的渐近曲线。同时因为线性掷骰 `red_lin` 在 `[0.65 * eff, 1.0 * eff]` 之间随机波动，高骰部分会提前接触双曲线，使期望减伤曲线在分叉处实现**零折点的自然过渡**。
-- **`gamma = 1.00`（未溢出区间伤害期望与原版完全相同，但单次分布不同）**：
-  当 `gamma = 1.0` 且护甲未发生溢出（`armour <= 100`）时，`eff_armour = armour * (N / D)`，平均减伤率为 `0.75 * armour * 0.01 * (N / D)`。乘以总伤害 `D` 后，期望伤害为 `D - N * (0.75 * armour * 0.01) = N * (1 - 0.75 * armour * 0.01) + A`，**数学期望与原版分毫不差**。
-  但两者的**单次伤害分布不同**：原版只对非破甲部分 `N` 掷骰子，破甲部分 `A` 零波动全额穿透；而新算法是用缩放后的有效护甲对总伤害 `D` 统一掷骰，单次波动按比例平摊到整体伤害上，输出曲线更平滑。
-- **`gamma = 1.30`（默认推荐值——扎实的重甲手感）**：
-  在 `1.0` 的基础上适度抬高了中高护甲对中低破甲攻击的抗性（例如 `50%` 破甲占比的穿透率由 `50%` 降至 `40.6%`）。重装步兵/重骑兵面对低破甲杂兵与通用武器时明显更耐打、“铁罐头”质感更足，而真正的高破甲专精单位（`70%+` 破甲）依然能高效破甲。
-- **`gamma = 1.40+`（更硬核的护甲区分度）**：
-  进一步拉开“纯破甲专精”与“半破甲/混合伤害”之间的差距（`50%` 破甲占比穿透率降至 `37.9%`）。
+### 护甲算法：两段独立缓冲 AP（Two-Term Cushioned AP）
 
-### 解决原版“护甲溢出”问题（`100+` 护甲）
+设单次攻击基础伤害为 `N`，破甲伤害为 `A`，目标护甲为 `M`。对于任意有效护甲 `m`，定义减伤函数 `red(m)`：
+1. **线性掷骰（无硬截断）**：`roll(m) = uniform(m * lower_cap, m)`，`red_lin(m) = clamp(roll(m) * 0.01, 0, 1)` *（默认 `lower_cap = 0.65`）*
+2. **双曲渐近曲线**：`red_hyp(m) = m / (m + S)` *（默认 `S = 20`）*
+3. **模式选择（可在 MCT 切换）**：
+   - **`Combined`（默认）**：`red(m) = min(red_lin(m), red_hyp(m))`
+   - **`Refined Linear Only`**：`red(m) = red_lin(m)`
+   - **`Hyperbolic Only`**：`red(m) = red_hyp(m)`
 
-在原版中，一旦护甲超过 `100`（例如 `120` 护甲掷骰区间为 `60% ~ 120%`），超出 `100%` 的部分会被强行截断为 `100%`；到了 `200` 护甲时非破甲伤害几乎每次都被 `100%` 格挡，导致高护甲面对混合伤害时很快触及收益死墙（例如面对 `50%` AP 攻击，原版最高只能减免 `50%` 总伤）。
+最终伤害公式为：
+- **`DMG(N, A, M) = max(min_damage, N * (1 - red(M)) + A * (1 - red(c_ap * M)))`** *（默认 `c_ap = 0.25`，`min_damage = 1.0`）*
 
-本 Mod 先按 `(1 - p)` 折算为有效护甲 `eff_armour`，再在高甲区平滑接入 `Hyperbolic(S = 20)`：即使面对 `50%` 破甲攻击，`120 ~ 200` 护甲依然能平滑、有意义地提供递进防护，既彻底消除了 `100+` 护甲的溢出失真，又不会让重甲彻底免疫伤害。
+### 与原版的核心区别
 
-### 50% AP 伤害占比下的减伤曲线对比与在线交互工具
+| 维度 | 原版机制 | 本 Mod（Two-Term Cushioned AP） |
+|---|---|---|
+| **非破甲伤害 `N`** | 按 `[0.5 * M, M]` 掷骰，`100%` 硬截断 | `min(Linear(0.65 * M, M), M / (M + 20))`：下限提升至 `0.65` 让重甲更稳，高甲区平滑接入双曲尾部，消除 `100+` 溢出 |
+| **破甲伤害 `A`** | 完全无视护甲（等价于 `c_ap = 0`） | 按 `c_ap * M` 缓冲减免（默认 `c_ap = 0.25`）：重甲能有效减缓纯破甲伤害，同时高破甲依然保有绝对穿透优势 |
+| **单调性保证** | `100+` 护甲对混合/高 AP 收益很快撞墙 | 护甲越高 EHP 严格越高（`dEHP/dM > 0`），且无论是增加 `N` 还是 `A` 都严格提升最终伤害，不存在任何数值倒挂 |
+| **高甲手感** | `120–200` 护甲大量点数被截断浪费 | `120–200` 护甲对 `N` 和 `A` 均提供平滑递进的真实防护，且永远不会出现 `100%` 免伤 |
+
+### 减伤曲线对比与在线交互工具
 
 > **[点击打开在线交互式 2D 护甲与破甲曲线工具 (GitHub Pages)](https://iwakura-reinn.github.io/WHTW3-Refined-Armour-Penetration/)**  
-> 支持实时拖动 `gamma`、`lower_cap`、`Hyperbolic Step S`，自由切换 EHP / 减伤比例 / 边际导数纵轴及任意 `AP%` / `护甲` 切片（源码位于 `docs/index.html`）。
+> 支持实时拖动 `c_ap`、`lower_cap`、`Hyperbolic Step S`，自由切换 EHP / 减伤比例 / 边际导数纵轴及任意 `AP%` / `护甲` 切片（源码位于 `docs/index.html`）。
 
-| 目标护甲 | 原版平均减伤比 | `gamma = 1.0` *(lc=0.5)* | `gamma = 1.3, lc = 0.65, S = 20`（默认） | `gamma = 1.4, lc = 0.65, S = 20` |
-|---:|---:|---:|---:|---:|
-| **0** | `0.00%` | `0.00%` | `0.00%` | `0.00%` |
-| **20** | `7.50%` | `7.50%` | `9.80%` | `10.25%` |
-| **40** | `15.00%` | `15.00%` | `19.60%` | `20.50%` |
-| **60** | `22.50%` | `22.50%` | `29.40%` | `30.74%` |
-| **80** | `30.00%` | `30.00%` | `39.20%` | `40.99%` |
-| **100** | `37.50%` | `37.50%` | `48.99%` | `51.24%` |
-| **120** | `43.33%` *(开始溢出)* | `45.00%` | `58.79%` | `61.49%` |
-| **140** | `46.79%` *(严重溢出)* | `52.50%` | `68.48%` | `71.21%` |
-| **160** | `48.75%` *(严重溢出)* | `60.00%` | `76.08%` | `78.24%` |
-| **180** | `49.72%` *(接近死墙)* | `66.76%` | `81.33%` | `82.94%` |
-| **200** | `50.00%` *(封顶死墙)* | `72.22%` | `84.74%` | `85.80%` |
+| 目标护甲 | 原版平均减伤（`50%` AP） | Two-Term `c_ap = 0.25`（`50%` AP） | Two-Term `c_ap = 0.25`（`100%` AP） |
+|---:|---:|---:|---:|
+| **0** | `0.00%` | `0.00%` | `0.00%` |
+| **20** | `7.50%` | `10.31%` | `4.12%` |
+| **40** | `15.00%` | `20.62%` | `8.25%` |
+| **60** | `22.50%` | `30.94%` | `12.38%` |
+| **80** | `30.00%` | `41.25%` | `16.50%` |
+| **100** | `37.50%` | `49.58%` | `20.62%` |
+| **120** | `43.33%` *(开始溢出)* | `54.88%` | `24.75%` |
+| **140** | `46.79%` *(严重溢出)* | `58.19%` | `28.88%` |
+| **160** | `48.75%` *(严重溢出)* | `60.94%` | `33.00%` |
+| **180** | `49.72%` *(接近死墙)* | `63.56%` | `37.12%` |
+| **200** | `50.00%` *(封顶死墙)* | `66.08%` | `41.25%` |
+
+*（默认参数：`c_ap = 0.25`，`lower_cap = 0.65`，`S = 20`，`Combined` 模式。）*
 
 ### 原生注入原理与安全性说明
 
 - 《战锤 3》的护甲结算逻辑编译在 `Warhammer3.exe` 原生 C++ 代码中，纯 Lua 或 DB 表无法修改计算公式。
-- 本 Mod 将开源编译的 64 位原生 DLL（`refined_armour_penetration_v1.dll`，约 61 KB）内嵌于 `.pack` 包的 `refined_armour_penetration_bin.lua` 中。
-- 游戏启动时，Lua 脚本会校验游戏根目录下是否存在同大小 DLL；若不存在则自动释放一次并通过 `require` 加载（订阅即用，无需玩家手动复制 DLL）。
+- 本 Mod 将开源编译的 64 位原生 DLL（`refined_armour_penetration_v1.dll`，约 56 KB）内嵌于 `.pack` 包的 `refined_armour_penetration_bin.lua` 中。
+- 游戏启动时，Lua 脚本会校验游戏根目录下是否存在同大小及同 SHA-256 校验标记的 DLL；若不一致则自动释放并通过 `require` 加载（订阅即用，无需玩家手动复制 DLL）。
 - DLL 内部使用**特征码扫描**定位 3 处护甲结算点，在进入战斗时启用，战斗结束自动停用，退出游戏自动还原。无任何联网、注册表或后台驻留行为，完整 C 源码全部公开在本仓库 `src/` 目录。
 
 ### MCT 调参与兼容性
 
-- **支持 MCT（Mod Configuration Tool）**：可在游戏内随时切换 `armour_mode`（结合 / 纯线性 / 纯双曲）、调节 `gamma`、`lower_cap`、`hyp_step`（`S`）、`min_damage`、是否使用原版 `_kv_rules` 下限、以及是否开启 `5s` 诊断日志（`refined_armour_penetration_diag.txt`）。不装 MCT 也可按默认参数正常运行。
+- **支持 MCT（Mod Configuration Tool）**：可在游戏内随时切换 `armour_mode`（结合 / 纯线性 / 纯双曲）、调节 `ap_armour_factor`（`c_ap`）、`lower_cap`、`hyp_step`（`S`）、`min_damage`、是否使用原版 `_kv_rules` 下限、以及是否开启 `5s` 诊断日志（`refined_armour_penetration_diag.txt`）。不装 MCT 也可按默认参数正常运行。
 - **兼容性**：不修改任何 DB 表，兼容绝大部分兵种与大型 Mod（如 SFO、Radious 等）。
 - **平台与联机**：仅支持 **Windows 64 位**（Mac/Linux 会安全回退为原版逻辑不会闪退）；联机时需双方同时启用且 MCT 设置一致，否则会不同步。

@@ -245,11 +245,16 @@
         <label><span id="tStep">Hyperbolic Step (S)</span> <span class="val" id="vStep">20</span></label>
         <input type="range" id="hypStep" min="5" max="150" step="5" value="20" />
       </div>
+      <div>
+        <label><span id="tCap">AP Armour Factor (c_ap)</span> <span class="val" id="vCap">0.25</span></label>
+        <input type="range" id="cAp" min="0.00" max="0.60" step="0.05" value="0.25" />
+      </div>
     </div>
 
     <div class="card">
       <div class="card-title" id="tCurvesTitle">Visible Curves</div>
       <label class="check-item"><input type="checkbox" id="cCombined" checked /><span class="swatch" style="background:#f85149"></span><span id="tCCombined">Combined: min(Linear, Hyperbolic)</span></label>
+      <label class="check-item"><input type="checkbox" id="cTwoTerm" checked /><span class="swatch" style="background:#ffa657"></span><span id="tCTwoTerm">Two-Term Cushioned AP (c_ap)</span></label>
       <label class="check-item"><input type="checkbox" id="cLinear" checked /><span class="swatch" style="background:#3fb950"></span><span id="tCLinear">Refined Linear (Uncapped)</span></label>
       <label class="check-item"><input type="checkbox" id="cHyperbolic" checked /><span class="swatch" style="background:#a371f7"></span><span id="tCHyp">Hyperbolic (eff / (eff + S))</span></label>
       <label class="check-item"><input type="checkbox" id="cVanilla" checked /><span class="swatch" style="background:#58a6ff"></span><span id="tCVanilla">Vanilla WH3</span></label>
@@ -306,8 +311,10 @@ const I18N = {
     tGamma: 'gamma (AP exponent)',
     tLower: 'lower_cap (Linear roll min)',
     tStep: 'Hyperbolic Step (S)',
+    tCap: 'AP Armour Factor (c_ap)',
     tCurvesTitle: 'Visible Curves',
     tCCombined: 'Combined: min(Linear, Hyperbolic)',
+    tCTwoTerm: 'Two-Term Cushioned AP (c_ap)',
     tCLinear: 'Refined Linear (Uncapped)',
     tCHyp: 'Hyperbolic (eff / (eff + S))',
     tCVanilla: 'Vanilla WH3',
@@ -320,6 +327,7 @@ const I18N = {
     yDeriv: 'Marginal d(EHP)/dX',
     vs: 'vs',
     lblCombined: 'Combined (min)',
+    lblTwoTerm: 'Two-Term (c_ap)',
     lblLinear: 'Refined Linear',
     lblHyp: 'Hyperbolic',
     lblVanilla: 'Vanilla'
@@ -348,8 +356,10 @@ const I18N = {
     tGamma: 'gamma (破甲指数)',
     tLower: 'lower_cap (线性掷骰下限)',
     tStep: '双曲步长 S (Hyperbolic Step)',
+    tCap: '破甲吃甲系数 (c_ap)',
     tCurvesTitle: '显示曲线',
     tCCombined: '两者结合: min(线性, 双曲)',
+    tCTwoTerm: '两段独立缓冲 AP (c_ap)',
     tCLinear: 'Refined Linear (无上限)',
     tCHyp: '双曲公式 (eff / (eff + S))',
     tCVanilla: '原版 WH3 (Vanilla)',
@@ -362,6 +372,7 @@ const I18N = {
     yDeriv: '边际导数 d(EHP)/dX',
     vs: '随',
     lblCombined: '结合 min(线性,双曲)',
+    lblTwoTerm: '两段缓冲 (c_ap)',
     lblLinear: 'Refined 线性',
     lblHyp: '双曲公式',
     lblVanilla: '原版 Vanilla'
@@ -370,7 +381,7 @@ const I18N = {
 
 function applyLang() {
   const t = I18N[lang];
-  for (const k of ['btnLang','btnResetAll','tTitle','tSub','tAxesTitle','tXAxisLbl','optXArmour','optXAp','tYAxisLbl','optYEhp','optYRed','optYDeriv','tSliceAp','tSliceArmour','tZoomTitle','tLockX','tLockY','btnApplyRange','btnResetZoom','tParamsTitle','tGamma','tLower','tStep','tCurvesTitle','tCCombined','tCLinear','tCHyp','tCVanilla','tHint']) {
+  for (const k of ['btnLang','btnResetAll','tTitle','tSub','tAxesTitle','tXAxisLbl','optXArmour','optXAp','tYAxisLbl','optYEhp','optYRed','optYDeriv','tSliceAp','tSliceArmour','tZoomTitle','tLockX','tLockY','btnApplyRange','btnResetZoom','tParamsTitle','tGamma','tLower','tStep','tCap','tCurvesTitle','tCCombined','tCTwoTerm','tCLinear','tCHyp','tCVanilla','tHint']) {
     el(k).textContent = t[k];
   }
   tip.textContent = t.tipDefault;
@@ -383,9 +394,20 @@ function expectedMinCap(a, b, cap) {
   return (((cap * cap - a * a) * 0.5) + cap * (b - cap)) / (b - a);
 }
 
+function redCombSingle(x, p) {
+  if (x <= 0) return 0.0;
+  const redHyp = x / (x + p.hypStep);
+  return expectedMinCap(0.01 * p.lowerCap * x, 0.01 * x, redHyp);
+}
+
 function calcRed(kind, armour, r, p) {
   if (kind === 'vanilla') {
     return (1.0 - r) * expectedMinCap(0.005 * armour, 0.01 * armour, 1.0);
+  }
+  if (kind === 'twoterm') {
+    const rn = redCombSingle(armour, p);
+    const ra = redCombSingle(armour * p.cAp, p);
+    return (1.0 - r) * rn + r * ra;
   }
   const eff = armour * (1.0 - Math.pow(r, p.gamma));
   const redHyp = eff > 0 ? (eff / (eff + p.hypStep)) : 0.0;
@@ -431,7 +453,8 @@ function getParams() {
     sliceArmour: parseFloat(el('sliceArmour').value),
     gamma: parseFloat(el('gamma').value),
     lowerCap: parseFloat(el('lowerCap').value),
-    hypStep: parseFloat(el('hypStep').value)
+    hypStep: parseFloat(el('hypStep').value),
+    cAp: parseFloat(el('cAp').value)
   };
 }
 
@@ -442,6 +465,7 @@ function getActiveCurves(p) {
   if (el('cLinear').checked) activeCurves.push({ kind: 'linear', label: `${t.lblLinear} (g=${p.gamma.toFixed(2)})`, color: '#3fb950', dash: [4, 3], width: 2.3 });
   if (el('cHyperbolic').checked) activeCurves.push({ kind: 'hyperbolic', label: `${t.lblHyp} (S=${p.hypStep}, g=${p.gamma.toFixed(2)})`, color: '#a371f7', dash: [2, 2], width: 2.4 });
   if (el('cCombined').checked) activeCurves.push({ kind: 'combined', label: `${t.lblCombined} (S=${p.hypStep}, g=${p.gamma.toFixed(2)})`, color: '#f85149', dash: [], width: 3.0 });
+  if (el('cTwoTerm').checked) activeCurves.push({ kind: 'twoterm', label: `${t.lblTwoTerm} (c=${p.cAp.toFixed(2)})`, color: '#ffa657', dash: [9, 3, 2, 3], width: 2.8 });
   return activeCurves;
 }
 
@@ -489,6 +513,7 @@ function draw() {
   el('vGamma').textContent = p.gamma.toFixed(2);
   el('vLower').textContent = p.lowerCap.toFixed(2);
   el('vStep').textContent = p.hypStep.toFixed(0);
+  el('vCap').textContent = p.cAp.toFixed(2);
 
   const activeCurves = getActiveCurves(p);
   computeAutoRanges(p, activeCurves);
@@ -620,7 +645,9 @@ function resetAll() {
   el('gamma').value = 1.30;
   el('lowerCap').value = 0.65;
   el('hypStep').value = 20;
+  el('cAp').value = 0.25;
   el('cCombined').checked = true;
+  el('cTwoTerm').checked = true;
   el('cLinear').checked = true;
   el('cHyperbolic').checked = true;
   el('cVanilla').checked = true;
@@ -762,7 +789,7 @@ cv.addEventListener('wheel', e => {
   draw();
 }, { passive: false });
 
-for (const id of ['sliceAp', 'sliceArmour', 'gamma', 'lowerCap', 'hypStep', 'cCombined', 'cLinear', 'cHyperbolic', 'cVanilla', 'lockX', 'lockY']) {
+for (const id of ['sliceAp', 'sliceArmour', 'gamma', 'lowerCap', 'hypStep', 'cAp', 'cCombined', 'cTwoTerm', 'cLinear', 'cHyperbolic', 'cVanilla', 'lockX', 'lockY']) {
   el(id).addEventListener('input', draw);
   el(id).addEventListener('change', draw);
 }
