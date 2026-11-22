@@ -54,9 +54,10 @@ In vanilla, an `Armour = 120` unit rolls between `60%` and `120%` reduction on n
 
 With **Refined Armour Penetration**, armour is scaled by `(1 - p)` **first** to obtain `eff_armour`, and high effective armour smoothly enters the `Hyperbolic(S = 20)` tail (`eff / (eff + 20)`), so `120–200` armour continues to provide meaningful, smooth protection without ever becoming 100% invulnerable.
 
-### Reduction Curve: `ratio = f(Armour)` at `50%` AP Share (`N = 50, A = 50`)
+### Reduction Curve & Interactive Explorer: `ratio = f(Armour)` at `50%` AP Share (`N = 50, A = 50`)
 
-![Damage Reduction Ratio Curve at 50% AP](docs/armour_curve_50ap.svg)
+> **[Open Interactive 2D Armour & AP Curve Explorer (GitHub Pages)](https://iwakura-reinn.github.io/WHTW3-Refined-Armour-Penetration/)**  
+> Tune `gamma`, `lower_cap`, and `Hyperbolic Step S` in real time, switch between EHP / Reduction % / Marginal Derivative, or inspect any `(Armour, AP%)` slice (`docs/index.html`).
 
 | Target Armour | Vanilla Avg Reduction | `gamma = 1.0` | `gamma = 1.3, S = 20` (Default) | `gamma = 1.4, S = 20` |
 |---:|---:|---:|---:|---:|
@@ -132,9 +133,10 @@ With **Refined Armour Penetration**, armour is scaled by `(1 - p)` **first** to 
 
 本 Mod 先按 `(1 - p)` 折算为有效护甲 `eff_armour`，再在高甲区平滑接入 `Hyperbolic(S = 20)`：即使面对 `50%` 破甲攻击，`120 ~ 200` 护甲依然能平滑、有意义地提供递进防护，既彻底消除了 `100+` 护甲的溢出失真，又不会让重甲彻底免疫伤害。
 
-### 50% AP 伤害占比下的减伤曲线对比：`ratio = f(armour)`
+### 50% AP 伤害占比下的减伤曲线对比与在线交互工具
 
-![50% AP 占比下原版与新算法减伤曲线对比](docs/armour_curve_50ap.svg)
+> **[点击打开在线交互式 2D 护甲与破甲曲线工具 (GitHub Pages)](https://iwakura-reinn.github.io/WHTW3-Refined-Armour-Penetration/)**  
+> 支持实时拖动 `gamma`、`lower_cap`、`Hyperbolic Step S`，自由切换 EHP / 减伤比例 / 边际导数纵轴及任意 `AP%` / `护甲` 切片（源码位于 `docs/index.html`）。
 
 | 目标护甲 | 原版平均减伤比 | `gamma = 1.0` | `gamma = 1.3, S = 20`（默认） | `gamma = 1.4, S = 20` |
 |---:|---:|---:|---:|---:|
