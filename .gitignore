@@ -1,0 +1,5 @@
+build/
+*.dll
+*.o
+lua/script/_lib/mod/refined_armour_penetration_bin.lua
+__pycache__/
